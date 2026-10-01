@@ -4,6 +4,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from audit import audit_signals
 from layout import solve_layout
+from rewire import RewireError, rewire_plan
 from solver import (EXAMPLES, ConfigError, FaultTargetError,
                     fault_assessment, solve)
 
@@ -91,6 +92,31 @@ def fault_drill():
         if exc.code == "NO_ALTERNATIVE":
             # 演练完成但存在无替代路径的路由：结构化冲突
             return _structured_error(exc, 409)
+        return _structured_error(exc, 400)
+    return jsonify(result)
+
+
+@app.post("/api/rewire-drill")
+def rewire_drill():
+    """无中断改线演练：现状配置 → 目标路由列表，保护路由全程保持通声。"""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "请求体必须是 JSON 对象"}}), 400
+    config = body.get("config")
+    target = body.get("target")
+    protected = body.get("protected", [])
+    if not isinstance(config, dict):
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "缺少 config 当前配置对象"}}), 400
+    if not isinstance(target, dict):
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "缺少 target 目标对象 {routes: [...]}"}}), 400
+    try:
+        result = rewire_plan(config, target, protected)
+    except RewireError as exc:
+        return _structured_error(exc, getattr(exc, "status", 400))
+    except ConfigError as exc:
         return _structured_error(exc, 400)
     return jsonify(result)
 

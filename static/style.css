@@ -117,6 +117,27 @@ code { background: #12151a; border: 1px solid var(--border); border-radius: 4px;
 svg text { font-family: inherit; }
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
 
+/* ---------------- 无中断改线演练 ---------------- */
+.mini-h { font-size: 14px; color: var(--muted); margin: 4px 0 8px; font-weight: 500; }
+.rewire-step {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px; background: #171c25;
+}
+table.rewire-cp { margin-top: 8px; }
+table.rewire-cp td { font-size: 13px; }
+.cp-mark {
+  display: inline-block; margin-right: 10px; padding: 1px 9px;
+  border-radius: 10px; font-size: 12px; font-weight: 600;
+}
+.cp-mark.ok { background: rgba(62,207,142,.16); color: var(--green); }
+.cp-mark.bad { background: rgba(255,107,107,.18); color: var(--red); }
+.ok-text { color: var(--green); font-weight: 600; }
+.bad-text { color: var(--red); font-weight: 600; }
+.rewire-pchains { margin-top: 8px; }
+.rewire-pchain { margin: 4px 0; font-size: 13px; }
+.rewire-pchain summary { cursor: pointer; color: var(--muted); }
+.rewire-pchain[open] summary { color: var(--text); }
+
 /* ---------------- 信号命名一致性审计 ---------------- */
 .audit-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
 .audit-tab {

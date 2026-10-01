@@ -56,8 +56,34 @@
 
   <section id="results"></section>
 
+  <section class="card" id="rewire-card" hidden>
+    <h2>4. 无中断改线演练</h2>
+    <p class="hint">在<b>当前配置</b>已安装跳线的基础上，提交<b>目标路由列表</b>与<b>必须始终保持通声的路由序号</b>。
+      系统按全常态 / 半常态 / 插孔占用规则，生成从现状到目标的逐步<b>拆线 · 换接 · 补线</b>方案：
+      每一步标注插孔变更、受影响路由与保护路由在每个插拔检查点的通声状态，优先复用兼容跳线、拆装次数最少；
+      需要临时跳线（中途占用、用完即拆）时单独列出。找不到保持保护路由连续通声的顺序时返回结构化阻塞原因；
+      目标路由非法或本身不可解时不产生任何部分方案。</p>
+
+    <div class="rewire-cols">
+      <div>
+        <h3 class="mini-h">目标路由（源 → 目标，按序号对应现状路由）</h3>
+        <table class="grid">
+          <thead><tr><th>#</th><th>信号源（输出端口）</th><th>目标（输入端口）</th><th>保护</th></tr></thead>
+          <tbody id="rewire-route-rows"></tbody>
+        </table>
+        <button class="add" onclick="rewireAddRoute()">+ 添加目标路由</button>
+        <div class="drill-controls" style="margin-top:10px">
+          <button onclick="rewireSync()">⟳ 与当前路由一致</button>
+          <button class="primary" onclick="runRewire()">🔀 生成无中断改线方案</button>
+          <span id="rewire-hint" class="hint"></span>
+        </div>
+      </div>
+    </div>
+    <div id="rewire-results"></div>
+  </section>
+
   <section class="card" id="drill-card" hidden>
-    <h2>4. 单点故障评估（断路演练）</h2>
+    <h2>5. 单点故障评估（断路演练）</h2>
     <p class="hint">先按当前配置完成规划，再选择一条<b>已安装跳线</b>或一条<b>生效中的常态连接</b>模拟断路。
       后端保持其他占用状态不变，重新评估全部路由：受影响路由、失效原因、断点端口与仍可用的替代路径如下；
       候选清单按受影响路由数量降序排列。</p>
@@ -70,7 +96,7 @@
   </section>
 
   <section class="card" id="layout-card" hidden>
-    <h2>5. 前面板走线排版</h2>
+    <h2>6. 前面板走线排版</h2>
     <p class="hint">为面板分区指定<b>可用走线槽层</b>与<b>固定插孔列位</b>（按从左到右顺序填写插孔对编号）。
       系统保持信号拓扑、常态模式与跳线端点不变，为每根跳线分配<b>走线层</b>与<b>左右绕行方向</b>，
       按「<b>交叉数最少 → 跨区线数最少 → 同层长度最短</b>」求解，输出每根跳线的层/方向/交叉对与无法避免的冲突。
@@ -88,7 +114,7 @@
   </section>
 
   <section class="card" id="audit-card" hidden>
-    <h2>6. 信号命名一致性审计</h2>
+    <h2>7. 信号命名一致性审计</h2>
     <p class="hint">为<b>设备端口 / 插孔对 / 已规划跳线 / 路由</b>填写规范信号名与别名（别名选填）。
       系统沿<b>设备内部 · 生效常态 · 跳线</b>传播名签，按<b>半常态分流语义</b>归并端点，检测同一连通分量的
       <b>互斥名称</b>、<b>别名环</b>、<b>无标签断点</b>与<b>跨路由串线</b>，给出每项问题的<b>最短证据路径</b>
