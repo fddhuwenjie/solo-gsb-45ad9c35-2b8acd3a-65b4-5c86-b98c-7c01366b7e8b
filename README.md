@@ -40,6 +40,36 @@
 时仍高亮同一条物理证据路径。审计**只读取规划结果，不修改任何路由 / 常态 / 跳线**；
 页面按连通分量着色拓扑，点击问题高亮其最短证据路径，可逐条采纳修正预览并即时复审。
 
+新增 **无中断改线演练**（`POST /api/seamless-rewire`）：操作员提交**当前配置**、
+**目标路由列表**（设备与插孔对不变，只换路由）与**必须始终保持通声的当前路由
+序号**。后端先按当前配置重建全部已安装跳线，再用同一份设备 / 插孔对对目标路由做
+一次全新规划，随后在「现状接线 → 目标接线」之间用带保护约束的确定性搜索
+（Dijkstra）生成逐步方案：
+
+- **拆线（remove）**：跳线两端全部拔下；**换接（complete）**：跳线一端保持、
+  另一端改插空闲插孔（含为解开占用死锁的**临时让位 park**）；**补线（add）**：
+  在两个空闲插孔间插线——**优先复用此前拆下的兼容跳线**，其次才动用新跳线；
+- **临时跳线（temp-add / temp-remove）**：仅过渡存在、目标态不需要的旁路跳线，
+  端点只能取**目标态也空闲**的插孔（故永不与目标补线抢孔），单独编号、单独列出；
+- 每一步都按**全常态（任一侧插线即断）/ 半常态（仅下孔插线断、上孔插线并送）/
+  直通**规则由当前插头占用直接推导物理图，校验每个保护路由 source→target 仍有
+  完整通路（设备内部 + 生效常态 + 在役跳线）；逐步输出**插孔变更、受影响路由、
+  保护路由是否仍可用（含其当前通路与是否经临时跳线）**；
+- 优化目标字典序：**步骤数最少（拆装次数最少）→ 优先完工 / 补线 / 拆线（驱动
+  兼容跳线复用）→ 最后动用临时旁路**；搜索节点超限时返回 `inconclusive` 说明，
+  不伪称证明无解；
+- **若不存在保持保护路由连续通声的顺序**：返回 409 与结构化阻塞原因
+  （`jack-occupied` 占用死锁插孔、`must-remove-cable` 必拆保护跳线、
+  `must-break-normal` 必断保护常态、`no-bypass-jack` 无空闲旁路插孔、
+  `protected-silent-baseline` 保护路由现状即失声），**不产生任何步骤**；
+- **目标配置非法**（端口引用错误、目标路由无解、目标跳线就位后仍不通声等）
+  一律 400，同样**不产生半成品方案**。
+
+页面「7. 无中断改线演练」卡片提供目标路由编辑表（可一键同步当前路由）、当前路由
+保护勾选与**逐步操作预览**（点击每一步查看插孔变更、受影响路由、保护路由通声
+状态与该步完成后的前面板图；临时跳线用黄色虚线标注），并汇总拆线 / 换接 / 补线 /
+临时跳线 / 新跳线 / 复用计数与跳线复用清单。
+
 - 后端：Python Flask（`app.py` + 纯逻辑求解器 `solver.py`）
 - 前端：原生 HTML / CSS / JavaScript（`static/`）
 
@@ -77,8 +107,9 @@ python app.py
    - 无解路由的**冲突端口**（插孔被占用、常态被保护等）；
    - **反馈环路**警告（信号经设备与连线形成回路时）。
 
-右上角下拉框可载入五个内置示例：标准录音链（可解）、冲突演示（无解）、
-反馈环路演示、走线排版演示（多分区 + 交叉优化）、命名审计演示（四类命名问题）。
+右上角下拉框可载入六个内置示例：标准录音链（可解）、冲突演示（无解）、
+反馈环路演示、走线排版演示（多分区 + 交叉优化）、无中断改线演练演示（拆线 /
+换接 / 补线 + 保护路由不中断）、命名审计演示（四类命名问题）。
 
 ## 单点故障评估（断路演练）
 
@@ -176,6 +207,8 @@ python app.py
 | 排版分区非法（漏列/重列/未知编号、槽层/容量非法等） | 400 | `LAYOUT_INVALID`（`details.missing` 列出漏列编号） |
 | 断路目标非法（跳线不存在、常态未生效等） | 400 | `FAULT_TARGET_INVALID`（`details.available` 列出可演练断点） |
 | 名签非法（未知端口/插孔对/跳线、路由序号越界、重复填写等） | 400 | `LABELS_INVALID` |
+| 无中断改线请求非法（目标端口错误、保护序号越界 / 不在目标列表等） | 400 | `REWIRE_INVALID` / `PROTECTED_INVALID` / `TARGET_INVALID` / `CONFIG_INVALID`（`details.conflicts` 列出目标无解路由） |
+| 不存在保持保护路由连续通声的改线顺序 | 409 | `NO_SEAMLESS_ORDER`（结构化阻塞原因在响应体，无步骤） |
 | 演练完成但存在无替代路径的路由 | 409 | `NO_ALTERNATIVE`（完整结果在 `assessment`） |
 | 请求体不是 JSON 对象 / 缺少字段 | 400 | `BAD_REQUEST` |
 
@@ -287,6 +320,49 @@ python app.py
   （kind/id/index/port）与中文 `label`；crosstalk 不返回任何 fix。
 - `pairs` / `cables` / `routes`：审计所基于的规划拓扑（供绘图与复核）。
 
+- `POST /api/seamless-rewire` — 无中断改线演练，请求体：
+
+```json
+{
+  "config": { "devices": [], "pairs": [], "routes": [] },
+  "targetRoutes": [
+    {"source": "MIC.out", "target": "MON.in1"}
+  ],
+  "protectedRoutes": [0, 1]
+}
+```
+
+`targetRoutes` 使用与 `config` 相同的设备 / 插孔对（不允许改背板）；
+`protectedRoutes` 为**当前路由从 0 开始的序号**，这些 `(source,target)` 对必须也
+原样出现在目标路由中。200 响应包含：
+
+- `steps[]`：逐步方案，每项含 `seq` / `action`（`remove` 拆线 / `complete` 换接 /
+  `park` 临时让位 / `add` 补线 / `temp-add`、`temp-remove` 临时跳线）/ `summary`、
+  `cable`、`jackChanges`（插孔与 `plug`/`unplug`）、`affectedRoutes`（前后通声
+  状态、当前 / 目标序号、是否保护路由）、`protected[]`（每条保护路由本步后是否
+  `audible`、通路端口 `path`、`viaTemporary`）、`snapshot`（该步完成后的 pairs /
+  cables，供绘图）；
+- `metrics`：`plugOps`（= 2× 步数）、`removeCount` / `moveCount`（含 `parkCount`）
+  / `addCount` / `tempAddCount`、`tempCableCount`、`newCableCount`、
+  `reusedCableCount`；
+- `reuse`：跳线复用清单 `unchanged`（保持不动）/ `moved`（一端换接）/
+  `recycled`（拆下后在别处复用）/ `new`（动用新跳线）/ `removedOriginal`（完全
+  拆除），每项标注源跳线编号与两端插孔；
+- `temporaryCables[]`：临时跳线（展示编号 9001 起、接入 / 拆除步号、保通的保护
+  路由序号）；
+- `baseline` / `target`：现状与目标的 pairs / cables（含常态状态），供前后对照；
+  `feedbackLoops` 为目标配置反馈环，`solverNote` 为搜索超限等说明。
+
+400 时 `error.code` 为 `CONFIG_INVALID`（当前配置非法）、`TARGET_INVALID`
+（目标配置非法；`details.conflicts` 给出目标无解路由与冲突端口，
+`details.silentRoutes` 给出目标跳线就位后仍不通声的路由）、`PROTECTED_INVALID`
+（保护序号越界 / 重复 / 非整数，或该路由不在目标列表）或 `REWIRE_INVALID`。
+409 时响应体顶层为 `error`，完整阻塞分析直接在同体（字段：`blockers[]`、
+`protectedRoutes`、`baseline`、`target`、`inconclusive`、`solverNote`），
+`blockers[].type` 取值 `jack-occupied` / `must-remove-cable` /
+`must-break-normal` / `no-bypass-jack` / `protected-silent-baseline` /
+`goal-not-audible`。两种错误都**不包含 steps**（不产生半成品方案）。
+
 ## 求解模型
 
 - 信号沿三类边流动：设备内部（输入→输出，0 跳线）、生效的常态连接
@@ -329,3 +405,18 @@ python app.py
   终源即报串线，证据路径为两组来源代表端口之间的多源 BFS 最短路（起点按端口名
   排序入队，保证可复现），只随规划/物理连通变化。
   审计全程不修改规划状态。
+- 无中断改线演练在两份 `plan_all` 结果（现状 / 目标）之间求解。物理状态只用
+  **在役跳线连接集 `(tJack,bJack)`**表示：常态是否生效完全由插头占用推导
+  （full：T/B 任一被插即断；half：仅 B 被插断，T 被插时信号并送）；信号通路在
+  「设备内部 in→out + 生效常态 上→下 + 在役跳线 T→B」有向图上做 0-1 Dijkstra。
+  动作为六类原子步（每步恰为两个插 / 拔动作）：拆线、单端换接（直接完工
+  complete / 临时让位 park）、补线、临时跳线接入 / 拆除。搜索为确定性 Dijkstra：
+  每步后强制所有保护路由可达；直接完工 / 补线 / 拆线优先，只有占用插孔的电缆
+  本身承载保护路由（不能拆）时才允许把它让到目标态也空闲的同型插孔（park），
+  且孔位只取编号最小者以避免排列爆炸；当没有任何安全推进动作时，才用“一条
+  候选跳线”的扩展 Dijkstra 为受威胁保护路由寻找**目标态空闲插孔**组成的临时
+  旁路，临时跳线在目标连接集里不存在，终态自然清零。代价字典序：步数 →
+  动作优先级（完工 / 补线 / 拆线先于让位、临时旁路）→ 确定性次序，因此兼容
+  跳线复用最多、新跳线与临时跳线最少。终态除连接集一致外还要求每条目标路由
+  真实可达，防止贪心规划的连接集与逐边可达性不一致（如设备回环伪路径）；节点
+  超 30 万返回 `inconclusive` 与已发现的阻塞点，不伪称无解。

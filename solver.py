@@ -814,6 +814,42 @@ EXAMPLES = {
             },
         },
     },
+    "rewire": {
+        "label": "无中断改线演练演示（拆线/换接/补线，保护不中断）",
+        "config": {
+            "devices": [
+                {"name": "MIC", "inputs": [], "outputs": ["out"]},
+                {"name": "PRE", "inputs": ["in"], "outputs": ["out"]},
+                {"name": "EQ", "inputs": ["in1", "in2"], "outputs": ["out"]},
+                {"name": "CMP", "inputs": ["in"], "outputs": ["out"]},
+                {"name": "AUX", "inputs": [], "outputs": ["out"]},
+                {"name": "FX", "inputs": [], "outputs": ["out"]},
+                {"name": "TAP", "inputs": [], "outputs": ["out"]},
+                {"name": "MON", "inputs": ["in1", "in2", "in3"], "outputs": []},
+                {"name": "REC", "inputs": ["in"], "outputs": []},
+                {"name": "SND", "inputs": ["in"], "outputs": []},
+            ],
+            "pairs": [
+                {"id": 1, "top": "MIC.out", "bottom": "PRE.in", "mode": "half"},
+                {"id": 2, "top": "PRE.out", "bottom": "EQ.in1", "mode": "half"},
+                {"id": 3, "top": "EQ.out", "bottom": "CMP.in", "mode": "half"},
+                {"id": 4, "top": "CMP.out", "bottom": "MON.in1", "mode": "through"},
+                {"id": 5, "top": "AUX.out", "bottom": "EQ.in2", "mode": "through"},
+                {"id": 6, "top": None, "bottom": "MON.in2", "mode": "through"},
+                {"id": 7, "top": None, "bottom": "REC.in", "mode": "through"},
+                {"id": 8, "top": "FX.out", "bottom": None, "mode": "through"},
+                {"id": 9, "top": None, "bottom": "MON.in3", "mode": "through"},
+                {"id": 10, "top": "TAP.out", "bottom": "SND.in", "mode": "through"},
+            ],
+            "routes": [
+                {"source": "MIC.out", "target": "MON.in1"},
+                {"source": "CMP.out", "target": "REC.in"},
+                {"source": "AUX.out", "target": "MON.in2"},
+                {"source": "FX.out", "target": "EQ.in2"},
+                {"source": "TAP.out", "target": "SND.in"},
+            ],
+        },
+    },
     "audit": {
         "label": "命名审计演示（互斥名/别名环/无标签/串线）",
         "config": {

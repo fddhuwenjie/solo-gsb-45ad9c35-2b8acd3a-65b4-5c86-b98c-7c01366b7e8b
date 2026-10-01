@@ -124,6 +124,11 @@ async function loadExample(name) {
   $("#layout-results").innerHTML = "";
   $("#audit-card").hidden = true;
   $("#audit-results").innerHTML = "";
+  $("#rewire-card").hidden = true;
+  $("#rewire-results").innerHTML = "";
+  rewireState.targetRoutes = [];
+  rewireState.protected = new Set();
+  lastRewireData = null;
   lastPlanData = null;
   lastAuditData = null;
 }
@@ -156,6 +161,7 @@ async function compute() {
   renderDrillPanel(data, ok);
   renderLayoutPanel(data, ok);
   renderAuditPanel(data, ok);
+  renderRewirePanel(data, ok);
   $("#results").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -1212,6 +1218,375 @@ function auditTopologySvg(data) {
         黄色路径为最短证据（${iss.evidence.filter((x) => x.kind === "edge").length} 跳），红色描边端点为冲突/断点</text>
     </g>`;
   }
+  s += `</svg>`;
+  return s;
+}
+
+/* ---------------- 无中断改线演练 ---------------- */
+
+const rewireState = { targetRoutes: [], protected: new Set() };
+let lastRewireData = null;
+
+function renderRewirePanel(data, httpOk) {
+  const card = $("#rewire-card");
+  if (!httpOk || !data || data.error || !Array.isArray(data.pairs)) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  if (!rewireState.targetRoutes.length) {
+    rewireState.targetRoutes = state.routes.map((r) => ({ ...r }));
+  }
+  // 当前路由表变化后，丢弃越界的保护勾选
+  for (const i of [...rewireState.protected]) {
+    if (i >= state.routes.length) rewireState.protected.delete(i);
+  }
+  renderRewireTargetRows();
+  renderRewireProtectList(data);
+  $("#rewire-hint").textContent =
+    `当前规划安装 ${data.cables.length} 根跳线：编辑目标路由并勾选保护路由后生成改线方案。`;
+}
+
+function renderRewireTargetRows() {
+  $("#rewire-target-rows").innerHTML = rewireState.targetRoutes.map((r, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td><select onchange="rewireState.targetRoutes[${i}].source = this.value">${portOptions("out", r.source)}</select></td>
+      <td><select onchange="rewireState.targetRoutes[${i}].target = this.value">${portOptions("in", r.target)}</select></td>
+      <td><button class="danger" onclick="rewireState.targetRoutes.splice(${i},1);renderRewireTargetRows()">删除</button></td>
+    </tr>`).join("");
+}
+
+function addRewireRoute() {
+  rewireState.targetRoutes.push({ source: "", target: "" });
+  renderRewireTargetRows();
+}
+
+function syncRewireTarget() {
+  rewireState.targetRoutes = state.routes.map((r) => ({ ...r }));
+  renderRewireTargetRows();
+}
+
+function renderRewireProtectList(data) {
+  const el = $("#rewire-protect-list");
+  if (!state.routes.length) {
+    el.innerHTML = `<p class="hint">当前没有路由。</p>`;
+    return;
+  }
+  el.innerHTML = state.routes.map((r, i) => {
+    const planned = data.routes[i];
+    const bad = !planned || planned.status !== "ok";
+    return `<label class="protect-row${bad ? " bad" : ""}">
+      <input type="checkbox" ${rewireState.protected.has(i) ? "checked" : ""}
+        onchange="toggleRewireProtect(${i}, this.checked)" ${bad ? "disabled" : ""}>
+      <span class="protect-no">路由 ${i + 1}</span>
+      <span class="hint">${esc(r.source)} → ${esc(r.target)}</span>
+      ${bad ? '<span class="tag bad">现状无解，不可保护</span>' : ""}
+    </label>`;
+  }).join("");
+}
+
+function toggleRewireProtect(i, on) {
+  if (on) rewireState.protected.add(i);
+  else rewireState.protected.delete(i);
+}
+
+async function runRewire() {
+  const out = $("#rewire-results");
+  if (!lastConfig) {
+    out.innerHTML = `<div class="banner warn">请先计算一次路由方案。</div>`;
+    return;
+  }
+  const target = rewireState.targetRoutes.map((r) => ({
+    source: r.source || null, target: r.target || null,
+  }));
+  if (!target.length) {
+    out.innerHTML = `<div class="banner warn">请至少填写一条目标路由。</div>`;
+    return;
+  }
+  const incomplete = target.findIndex((r) => !r.source || !r.target);
+  if (incomplete >= 0) {
+    out.innerHTML = `<div class="banner warn">目标路由第 ${incomplete + 1} 条的信号源 / 目标未选择完整。</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="banner">⏳ 正在按现状重建跳线并搜索无中断改线顺序…</div>`;
+  let data, status;
+  try {
+    const res = await fetch("/api/seamless-rewire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: lastConfig,
+        targetRoutes: target,
+        protectedRoutes: [...rewireState.protected].sort((a, b) => a - b),
+      }),
+    });
+    data = await res.json();
+    status = res.status;
+  } catch (e) {
+    out.innerHTML = `<div class="banner err">无法连接后端：${esc(e.message)}</div>`;
+    return;
+  }
+  lastRewireData = data;
+  if (status === 400) {
+    renderRewireInvalid(data);
+    return;
+  }
+  if (status === 409) {
+    renderRewireConflict(data);
+    return;
+  }
+  renderRewireResult(data);
+}
+
+function renderRewireInvalid(data) {
+  const err = data.error || {};
+  let extra = "";
+  const conf = err.details && err.details.conflicts;
+  if (Array.isArray(conf) && conf.length) {
+    extra = `<div class="result-card"><h3>目标配置中的无解路由（不产生半成品方案）</h3>` +
+      conf.map((c) => `<div class="route-block">
+        <div class="route-title">目标路由 ${c.route + 1}：${esc(c.source)} → ${esc(c.target)}
+          <span class="tag bad">无解</span></div>
+        <ul class="conflict-reasons">${(c.reasons || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+        ${c.ports && c.ports.length ? `<div class="conflict-ports">冲突端口：` +
+          c.ports.map((p) => `${esc(p.jack)}（${esc(p.port || "?")}）`).join("、") + `</div>` : ""}
+      </div>`).join("") + `</div>`;
+  }
+  const silent = err.details && err.details.silentRoutes;
+  if (Array.isArray(silent) && silent.length) {
+    extra += `<div class="result-card"><h3>目标跳线就位后仍不通声的路由</h3><ul class="notes">` +
+      silent.map((r) => `<li>${esc(r.source)} → ${esc(r.target)}</li>`).join("") + `</ul></div>`;
+  }
+  const d = err.details;
+  if (d && (d.index != null || d.source)) {
+    extra += `<div class="conflict-ports">${esc(d.source || "")} → ${esc(d.target || "")}</div>`;
+  }
+  $("#rewire-results").innerHTML =
+    `<div class="banner err">❌ ${esc(err.message || "改线请求非法")}</div>` + extra;
+}
+
+function renderRewireConflict(data) {
+  const err = data.error || {};
+  const p = data.assessment || data;
+  let html = `<div class="banner err">❌ ${esc(err.message || "不存在能保持保护路由连续通声的改线顺序")}</div>`;
+  if (p.solverNote) html += `<div class="banner warn">⚠️ ${esc(p.solverNote)}</div>`;
+  const pr = (p.protectedRoutes || []).map((x) =>
+    `路由 ${x.index + 1}（${x.source} → ${x.target}）`).join("、") || "（未指定）";
+  html += `<div class="result-card"><h3>保护路由</h3><p class="hint">${esc(pr)}</p></div>`;
+  const blockers = p.blockers || [];
+  if (blockers.length) {
+    const title = p.inconclusive ? "搜索中发现的阻塞点" : "结构化阻塞原因";
+    html += `<div class="result-card"><h3>${title}</h3><ul class="notes">` +
+      blockers.map((b) => `<li><span class="tag ${blockerTagClass(b.type)}">${esc(blockerTypeLabel(b.type))}</span>
+        ${esc(b.message)}` + blockerDetail(b) + `</li>`).join("") + `</ul></div>`;
+  }
+  html += `<div class="result-card"><h3>现状面板（起点）</h3>${panelSvg(p.baseline.pairs, p.baseline.cables)}</div>`;
+  if (p.target) {
+    html += `<div class="result-card"><h3>目标面板（期望终态）</h3>${panelSvg(p.target.pairs, p.target.cables)}</div>`;
+  }
+  $("#rewire-results").innerHTML = html;
+}
+
+function blockerTypeLabel(t) {
+  return ({
+    "jack-occupied": "插孔占用",
+    "must-remove-cable": "必拆保护跳线",
+    "must-break-normal": "必断保护常态",
+    "no-bypass-jack": "无旁路插孔",
+    "protected-silent-baseline": "保护路由现状失声",
+    "goal-not-audible": "目标态不通声",
+  })[t] || t;
+}
+function blockerTagClass(t) {
+  return t === "jack-occupied" ? "warn" : "bad";
+}
+function blockerDetail(b) {
+  let parts = [];
+  if (b.route != null) parts.push(`路由 ${b.route + 1}`);
+  if (b.pair != null) parts.push(`第 ${b.pair} 对`);
+  if (b.plugJack) parts.push(`插孔 ${b.plugJack}`);
+  if (b.cable) parts.push(`跳线 ${b.cable[0]}→${b.cable[1]}`);
+  return parts.length ? `<div class="conflict-ports">${esc(parts.join(" · "))}</div>` : "";
+}
+
+const REWIRE_ACTION_META = {
+  remove: { cls: "bad", icon: "🔌" },
+  complete: { cls: "ok", icon: "🔀" },
+  park: { cls: "warn", icon: "⏏️" },
+  add: { cls: "ok", icon: "➕" },
+  "temp-add": { cls: "warn", icon: "🟡" },
+  "temp-remove": { cls: "warn", icon: "🟡" },
+};
+
+function renderRewireResult(data) {
+  let html = "";
+  html += `<div class="banner ok">✅ 无中断改线方案已生成：共 <b>${data.stepCount}</b> 步
+    （${data.metrics.plugOps} 个插/拔动作），保护路由全程通声。</div>`;
+  if (data.solverNote) html += `<div class="banner warn">⚠️ ${esc(data.solverNote)}</div>`;
+  if (data.feedbackLoops && data.feedbackLoops.length) {
+    html += `<div class="banner warn">⚠️ 目标配置存在 ${data.feedbackLoops.length} 个反馈环路：<ul class="loop-list">` +
+      data.feedbackLoops.map((l) => `<li>${l.map(esc).join(" → ")}</li>`).join("") + `</ul></div>`;
+  }
+
+  const m = data.metrics;
+  html += `<div class="audit-stat-row">
+    <span class="audit-stat"><b>${m.plugOps}</b>插/拔动作</span>
+    <span class="audit-stat ok"><b>${m.removeCount}</b>拆线</span>
+    <span class="audit-stat ok"><b>${m.moveCount}</b>换接${m.parkCount ? `（含 ${m.parkCount} 次让位）` : ""}</span>
+    <span class="audit-stat ok"><b>${m.addCount}</b>补线</span>
+    <span class="audit-stat ${m.tempCableCount ? "warn" : "ok"}"><b>${m.tempCableCount}</b>临时跳线</span>
+    <span class="audit-stat ${m.newCableCount ? "warn" : "ok"}"><b>${m.newCableCount}</b>动用新跳线</span>
+    <span class="audit-stat ok"><b>${m.reusedCableCount}</b>复用兼容跳线</span>
+  </div>`;
+
+  const pr = data.protectedRoutes.map((x) =>
+    `路由 ${x.index + 1}（${x.source} → ${x.target}）`).join("、");
+  html += `<div class="result-card"><h3>保护路由（每一步后均校验通声）</h3>
+    <p class="hint">${esc(pr) || "（未指定保护路由）"}</p></div>`;
+
+  // 复用归类
+  const ru = data.reuse;
+  const reuseItems = [];
+  const pushGroup = (title, arr, tagCls) => arr.forEach((e) => reuseItems.push(
+    `<li><span class="tag ${tagCls}">${title}</span> ${esc(e.label)}：${esc(e.fromJack)}（${esc(e.fromPort || "—")}）
+     → ${esc(e.toJack)}（${esc(e.toPort || "—")}）` +
+    (e.originalFromJack ? ` <span class="hint">（原 ${esc(e.originalFromJack)}→${esc(e.originalToJack)}）</span>` : "") +
+    `</li>`));
+  pushGroup("保持不动", ru.unchanged, "ok");
+  pushGroup("一端换接", ru.moved, "warn");
+  pushGroup("拆下复用", ru.recycled, "warn");
+  pushGroup("动用新跳线", ru.new, "bad");
+  ru.removedOriginal.forEach((e) => reuseItems.push(
+    `<li><span class="tag bad">完全拆除</span> ${esc(e.label)}：${esc(e.fromJack)}→${esc(e.toJack)}</li>`));
+  html += `<div class="result-card"><h3>跳线复用方案（优先复用兼容跳线）</h3>
+    <ul class="notes">${reuseItems.join("") || "<li>无跳线变更。</li>"}</ul></div>`;
+
+  if (data.temporaryCables.length) {
+    html += `<div class="result-card"><h3>临时跳线（仅过渡使用，单独列出）</h3><ul class="notes">` +
+      data.temporaryCables.map((t) => `<li><span class="tag warn">${esc(t.label)}</span>
+        ${esc(t.fromJack)}（${esc(t.fromPort || "—")}） → ${esc(t.toJack)}（${esc(t.toPort || "—")}）
+        <span class="hint">第 ${t.addStep} 步接入 · 第 ${t.removeStep ?? "—"} 步拆除</span>` +
+        (t.protects.length ? ` <span class="hint">保通：${t.protects.map((r) => `路由 ${r + 1}`).join("、")}</span>` : "") +
+        `</li>`).join("") + `</ul></div>`;
+  }
+
+  // 逐步操作预览
+  html += `<div class="result-card"><h3>逐步操作预览（点击任一步查看该步完成后的面板状态）</h3>
+    <div class="rewire-steps" id="rewire-step-list">` +
+    data.steps.map((s, i) => rewireStepHtml(s, i, data.steps.length)).join("") + `</div>
+    <div id="rewire-step-detail"></div></div>`;
+
+  html += `<div class="result-card"><h3>现状面板（起点）</h3>${panelSvg(data.baseline.pairs, data.baseline.cables)}</div>`;
+  html += `<div class="result-card"><h3>目标面板（终点）</h3>${panelSvg(data.target.pairs, data.target.cables)}</div>`;
+
+  $("#rewire-results").innerHTML = html;
+  if (data.steps.length) selectRewireStep(0);
+}
+
+function rewireStepHtml(s, i, total) {
+  const meta = REWIRE_ACTION_META[s.action] || { cls: "ok", icon: "•" };
+  const prot = s.protected.length
+    ? s.protected.map((p) => `<span class="prot-chip ${p.audible ? "on" : "off"}"
+         title="${esc(p.source)} → ${esc(p.target)}${p.viaTemporary.length ? `（经临时跳线 ${p.viaTemporary.map((t) => "T" + t).join("、")}）` : ""}">
+         路由${p.routeNo} ${p.audible ? "✓通声" : "✗失声"}</span>`).join("")
+    : '<span class="hint">无保护路由</span>';
+  return `<button class="rewire-step ${meta.cls}" id="rewire-step-btn-${i}" onclick="selectRewireStep(${i})">
+    <span class="step-no">第 ${s.seq}/${total} 步</span>
+    <span class="step-icon">${meta.icon}</span>
+    <span class="step-title">${esc(s.actionLabel)}</span>
+    <span class="step-prot">${prot}</span>
+  </button>`;
+}
+
+function selectRewireStep(i) {
+  const data = lastRewireData;
+  if (!data || !data.steps[i]) return;
+  document.querySelectorAll(".rewire-step").forEach((b, k) =>
+    b.classList.toggle("active", k === i));
+  const s = data.steps[i];
+  const changes = s.jackChanges.map((c) => `<li>
+    <span class="tag ${c.change === "plug" ? "ok" : "bad"}">${c.change === "plug" ? "插入" : "拔下"}</span>
+    插孔 <b>${esc(c.jack)}</b>（${esc(c.port || "—")}）</li>`).join("");
+  const aff = s.affectedRoutes.length
+    ? s.affectedRoutes.map((r) => {
+        const badge = r.audibleBefore === r.audibleAfter
+          ? (r.audibleAfter ? '<span class="tag ok">保持通声</span>' : '<span class="tag bad">不通声</span>')
+          : (r.audibleAfter ? '<span class="tag ok">恢复通声 ↑</span>' : '<span class="tag bad">失声 ↓</span>');
+        const which = r.currentIndex != null ? `当前#${r.currentIndex + 1}` : "";
+        const which2 = r.targetIndex != null ? `目标#${r.targetIndex + 1}` : "";
+        return `<li>${badge} ${esc(r.source)} → ${esc(r.target)}
+          <span class="hint">${esc([which, which2].filter(Boolean).join(" / "))}</span>
+          ${r.protected ? '<span class="tag warn">保护</span>' : ""}</li>`;
+      }).join("")
+    : '<li class="hint">无路由受本步影响。</li>';
+  const protDetail = s.protected.length
+    ? s.protected.map((p) => `<div class="route-block">
+        <div class="route-title">路由 ${p.routeNo}：${esc(p.source)} → ${esc(p.target)}
+          <span class="tag ${p.audible ? "ok" : "bad"}">${p.audible ? "✓ 仍可用" : "✗ 失声"}</span>
+          ${p.viaTemporary.length ? `<span class="tag warn">经临时跳线 ${p.viaTemporary.map((t) => "T" + t).join("、")}</span>` : ""}
+        </div>
+        ${p.path ? `<div class="hint">通路：${p.path.map((x) => esc(x.port)).join(" → ")}</div>` : ""}
+      </div>`).join("")
+    : '<p class="hint">未指定保护路由。</p>';
+  $("#rewire-step-detail").innerHTML = `
+    <div class="step-detail-head"><b>${esc(s.summary)}</b></div>
+    <div class="rewire-detail-cols">
+      <div><h4>插孔变更</h4><ul class="notes">${changes}</ul></div>
+      <div><h4>受影响路由</h4><ul class="notes">${aff}</ul></div>
+    </div>
+    <h4>保护路由状态</h4>${protDetail}
+    <h4>本步完成后的前面板</h4>
+    ${rewireSnapshotSvg(s.snapshot)}`;
+  const det = $("#rewire-step-detail");
+  det.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function rewireSnapshotSvg(snap) {
+  // 复用面板图，但临时跳线用特殊颜色/虚线
+  const pairs = snap.pairs, cables = snap.cables;
+  if (!pairs.length) return "";
+  const colW = 96, x0 = 60, topY = 64, botY = 128, height = 300;
+  const width = x0 * 2 + colW * (pairs.length - 1);
+  const pos = {};
+  pairs.forEach((p, i) => {
+    pos[p.topJack] = { x: x0 + i * colW, y: topY };
+    pos[p.bottomJack] = { x: x0 + i * colW, y: botY };
+  });
+  const plugged = {};
+  cables.forEach((c) => { plugged[c.fromJack] = c; plugged[c.toJack] = c; });
+  let s = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
+  s += `<rect x="8" y="30" width="${width - 16}" height="140" rx="10" fill="#12151a" stroke="#2e3542"/>`;
+  for (const p of pairs) {
+    const t = pos[p.topJack], b = pos[p.bottomJack];
+    if (p.mode !== "through" && p.topPort && p.bottomPort) {
+      const color = p.normalActive ? "#3ecf8e" : "#5a6270";
+      s += `<line x1="${t.x - 18}" y1="${t.y}" x2="${b.x - 18}" y2="${b.y}" stroke="${color}" stroke-width="3"/>`;
+    }
+  }
+  cables.forEach((c) => {
+    const a = pos[c.fromJack], b = pos[c.toJack];
+    const color = c.temporary ? "#ffcf5c" : CABLE_COLORS[c.id % CABLE_COLORS.length];
+    const dash = c.temporary ? ' stroke-dasharray="7,5"' : "";
+    const depth = 60 + Math.abs(a.x - b.x) * 0.28;
+    const mx = (a.x + b.x) / 2, my = botY + depth;
+    s += `<path d="M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}" fill="none" stroke="${color}" stroke-width="3.5"${dash}/>`;
+    s += `<text x="${mx}" y="${my * 0.62}" fill="${color}" font-size="12" text-anchor="middle" font-weight="bold">${c.temporary ? "T" : "#"}${c.id}</text>`;
+  });
+  for (const p of pairs) {
+    for (const [jack, port, dy] of [[p.topJack, p.topPort, -14], [p.bottomJack, p.bottomPort, 24]]) {
+      const { x, y } = pos[jack];
+      const owner = plugged[jack];
+      const fill = owner
+        ? (owner.temporary ? "#ffcf5c" : CABLE_COLORS[owner.id % CABLE_COLORS.length])
+        : "#1d222b";
+      s += `<circle cx="${x}" cy="${y}" r="9" fill="${fill}" stroke="#9aa4b2" stroke-width="1.5"/>`;
+      s += `<text x="${x}" y="${y + dy}" fill="#9aa4b2" font-size="10" text-anchor="middle">${esc(port || "—")}</text>`;
+      s += `<text x="${x + 14}" y="${y + 4}" fill="#e6e9ef" font-size="10">${esc(jack)}</text>`;
+    }
+    s += `<text x="${pos[p.topJack].x}" y="${botY + 40}" fill="#9aa4b2" font-size="10" text-anchor="middle">第${p.id}对</text>`;
+  }
+  s += `<text x="20" y="${height - 12}" fill="#ffcf5c" font-size="11">黄色虚线＝临时跳线</text>`;
   s += `</svg>`;
   return s;
 }

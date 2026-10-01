@@ -172,3 +172,35 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px
 .legend .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
   vertical-align: -1px; margin: 0 4px 0 12px; border: 1.5px solid #9aa4b2; }
 .route-name-input { width: 130px; }
+
+/* ---------------- 无中断改线演练 ---------------- */
+.rewire-cols { display: flex; gap: 18px; flex-wrap: wrap; }
+.rewire-col { flex: 1 1 420px; min-width: 320px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: #171c25; }
+.rewire-col h3 { margin: 0 0 10px; font-size: 14px; color: var(--accent); }
+.protect-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow: auto; }
+.protect-row { display: flex; align-items: center; gap: 10px; font-size: 13.5px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: #12151a; cursor: pointer; }
+.protect-row.bad { opacity: .55; }
+.protect-row input { width: auto; }
+.protect-no { font-weight: 600; min-width: 56px; }
+
+.rewire-steps { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 14px; }
+.rewire-step { display: flex; align-items: center; gap: 12px; text-align: left;
+  padding: 10px 14px; border-left-width: 4px; background: #171c25; width: 100%; }
+.rewire-step.ok { border-left-color: var(--green); }
+.rewire-step.bad { border-left-color: var(--red); }
+.rewire-step.warn { border-left-color: var(--yellow); }
+.rewire-step.active { outline: 2px solid var(--accent); }
+.rewire-step .step-no { color: var(--muted); font-size: 12px; min-width: 76px; }
+.rewire-step .step-icon { font-size: 16px; }
+.rewire-step .step-title { font-weight: 600; min-width: 110px; }
+.rewire-step .step-prot { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.prot-chip { font-size: 11.5px; padding: 2px 9px; border-radius: 10px; }
+.prot-chip.on { background: rgba(62,207,142,.18); color: var(--green); }
+.prot-chip.off { background: rgba(255,107,107,.18); color: var(--red); }
+
+.step-detail-head { font-size: 15px; margin-bottom: 10px; }
+.rewire-detail-cols { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 8px; }
+.rewire-detail-cols > div { flex: 1 1 320px; }
+.rewire-detail-cols h4, #rewire-step-detail h4 { color: var(--muted); font-size: 13px; margin: 10px 0 4px; }

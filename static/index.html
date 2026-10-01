@@ -49,6 +49,7 @@
       <option value="conflict">冲突演示（无解）</option>
       <option value="feedback">反馈环路演示</option>
       <option value="layout">走线排版演示（多分区）</option>
+      <option value="rewire">无中断改线演练演示</option>
       <option value="audit">命名审计演示（互斥名/别名环/无标签/串线）</option>
     </select>
     <button class="primary" onclick="compute()">计算路由方案</button>
@@ -133,6 +134,41 @@
       <span id="audit-hint" class="hint"></span>
     </div>
     <div id="audit-results"></div>
+  </section>
+
+  <section class="card" id="rewire-card" hidden>
+    <h2>7. 无中断改线演练</h2>
+    <p class="hint">提交<b>当前配置</b>（先按它重建已安装跳线）、<b>目标路由列表</b>与<b>必须始终保持通声的
+      当前路由序号</b>。系统依据全常态 / 半常态 / 插孔占用规则，生成从现状到目标的逐步
+      <b>拆线 · 换接 · 补线</b>方案：每步标明插孔变更、受影响路由与保护路由是否仍可用，
+      优先复用兼容跳线、拆装次数最少；必须使用<b>临时跳线</b>时单独列出。
+      若不存在保持保护路由连续通声的顺序，返回结构化冲突与阻塞原因；目标配置非法不会产生半成品方案。</p>
+
+    <div class="rewire-cols">
+      <div class="rewire-col">
+        <h3>目标路由列表</h3>
+        <table class="grid">
+          <thead><tr><th>#</th><th>信号源</th><th>目标</th><th></th></tr></thead>
+          <tbody id="rewire-target-rows"></tbody>
+        </table>
+        <button class="add" onclick="addRewireRoute()">+ 添加目标路由</button>
+        <div class="drill-controls" style="margin-top:8px">
+          <button onclick="syncRewireTarget()">↺ 同步为当前路由</button>
+        </div>
+      </div>
+      <div class="rewire-col">
+        <h3>必须始终保持通声的当前路由</h3>
+        <div id="rewire-protect-list" class="protect-list"></div>
+        <p class="hint" style="margin-top:8px">勾选的路由在<b>每一步完成后</b>都必须仍有完整信号通路；
+          它们也必须原样出现在目标路由列表中。</p>
+      </div>
+    </div>
+
+    <div class="drill-controls" style="margin-top:14px">
+      <button class="primary" onclick="runRewire()">🧭 生成无中断改线方案</button>
+      <span id="rewire-hint" class="hint"></span>
+    </div>
+    <div id="rewire-results"></div>
   </section>
 </main>
 

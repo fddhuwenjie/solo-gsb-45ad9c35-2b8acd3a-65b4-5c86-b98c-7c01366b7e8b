@@ -4,6 +4,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from audit import audit_signals
 from layout import solve_layout
+from rewire import RewireError, SeamlessConflict, seamless_rewire
 from solver import (EXAMPLES, ConfigError, FaultTargetError,
                     fault_assessment, solve)
 
@@ -27,8 +28,11 @@ def _structured_error(exc, status):
     if getattr(exc, "details", None):
         body["error"]["details"] = exc.details
     if payload is not None:
-        # NO_ALTERNATIVE：演练本身完成，结构化评估结果随错误一起返回
+        # NO_ALTERNATIVE / NO_SEAMLESS_ORDER：演练完成但不可行，
+        # 结构化评估结果随错误一起返回（assessment 与顶层字段双份暴露）
         body["assessment"] = payload
+        for k, v in payload.items():
+            body.setdefault(k, v)
     return jsonify(body), status
 
 
@@ -91,6 +95,34 @@ def fault_drill():
         if exc.code == "NO_ALTERNATIVE":
             # 演练完成但存在无替代路径的路由：结构化冲突
             return _structured_error(exc, 409)
+        return _structured_error(exc, 400)
+    return jsonify(result)
+
+
+@app.post("/api/seamless-rewire")
+def seamless_rewire_drill():
+    """无中断改线演练：当前配置 + 目标路由 + 保护路由序号 → 逐步拆线/换接/补线。"""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "请求体必须是 JSON 对象"}}), 400
+    config = body.get("config")
+    target = body.get("targetRoutes")
+    protected = body.get("protectedRoutes", [])
+    if not isinstance(config, dict):
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "缺少 config 配置对象"}}), 400
+    if target is None:
+        return jsonify({"ok": False, "error": {"code": "BAD_REQUEST",
+                                               "message": "缺少 targetRoutes 目标路由数组"}}), 400
+    try:
+        result = seamless_rewire(config, target, protected)
+    except SeamlessConflict as exc:
+        # 不存在保持保护路由连续通声的顺序：结构化阻塞原因（不产生步骤）
+        return _structured_error(exc, 409)
+    except RewireError as exc:
+        return _structured_error(exc, 400)
+    except ConfigError as exc:
         return _structured_error(exc, 400)
     return jsonify(result)
 
